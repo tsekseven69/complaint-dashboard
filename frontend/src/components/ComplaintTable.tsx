@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Search, ChevronLeft, ChevronRight, Eye } from 'lucide-react'
-import { Complaint, ComplaintList, FilterOptions, fetchComplaints, fetchFilters } from '../api/client'
+import { Complaint, ComplaintList, FilterOptions, FilterParams, fetchComplaints, fetchFilters } from '../api/client'
 
 function ComplaintDetail({ complaint, onClose }: { complaint: Complaint; onClose: () => void }) {
   return (
@@ -77,7 +77,7 @@ function ComplaintDetail({ complaint, onClose }: { complaint: Complaint; onClose
   )
 }
 
-export default function ComplaintTable() {
+export default function ComplaintTable({ fp }: { fp: FilterParams }) {
   const [data, setData] = useState<ComplaintList | null>(null)
   const [filters, setFilters] = useState<FilterOptions | null>(null)
   const [page, setPage] = useState(1)
@@ -99,6 +99,9 @@ export default function ComplaintTable() {
         category: category || undefined,
         status: status || undefined,
         search: search || undefined,
+        org: fp.org,
+        date_from: fp.date_from,
+        date_to: fp.date_to,
       })
       setData(result)
     } catch {
@@ -106,7 +109,7 @@ export default function ComplaintTable() {
     } finally {
       setLoading(false)
     }
-  }, [page, district, category, status, search])
+  }, [page, district, category, status, search, fp])
 
   useEffect(() => {
     load()

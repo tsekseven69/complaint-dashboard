@@ -21,7 +21,7 @@ docker compose up --build -d
 
 # 4. Хүлээнэ (анх удаа ~2-3 минут)
 # Бэлэн болсон эсэхийг шалгах:
-docker compose ps
+docker compose 
 Хандах
 Үйлчилгээ	Хаяг
 Dashboard	http://localhost:5173

@@ -3,7 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, Legend, LabelList,
 } from 'recharts'
-import { Report as ReportData, fetchReport } from '../api/client'
+import { FilterParams, Report as ReportData, fetchReport } from '../api/client'
 
 const DYNAMIC_COLORS: Record<string, string> = {
   'ӨГ': '#1b2a4a',
@@ -16,13 +16,14 @@ const DYNAMIC_COLORS: Record<string, string> = {
   'Бусад': '#546e7a',
 }
 
-export default function Report() {
+export default function Report({ fp }: { fp: FilterParams }) {
   const [data, setData] = useState<ReportData | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchReport().then(setData).catch(() => {}).finally(() => setLoading(false))
-  }, [])
+    setLoading(true)
+    fetchReport(fp).then(setData).catch(() => {}).finally(() => setLoading(false))
+  }, [fp])
 
   if (loading) return <div className="loading"><div className="spinner" /></div>
   if (!data || !data.summary.total) return (

@@ -10,6 +10,15 @@ from src.modules.complaints.models import Complaint
 
 logger = logging.getLogger(__name__)
 
+# ── Source prefix mapping ────────────────────────────────────────────────────
+SOURCE_PREFIXES: dict[str, str] = {
+    "G": "11-11 төв",
+    "C": "1800-1200 лавлах утас",
+    "M": "НН3Б",
+    "J": "Хотула апп",
+    "W": "Eservice",
+}
+
 # ── Content classification: broad themes from keywords ──────────────────────
 THEME_KEYWORDS: dict[str, list[str]] = {
     "Зам, тээвэр": [
@@ -127,18 +136,31 @@ def detect_edges(description: str | None, category: str | None) -> list[str]:
 
 def extract_date_from_id(complaint_id: str) -> str | None:
     """Extract date from complaint ID like G260324001 -> 2026-03-24."""
-    m = re.match(r'G(\d{2})(\d{2})(\d{2})\d+', complaint_id)
+    m = re.match(r'[A-Za-z](\d{2})(\d{2})(\d{2})\d+', complaint_id)
     if m:
-        return f"2026-{m.group(2)}-{m.group(3)}"
+        return f"20{m.group(1)}-{m.group(2)}-{m.group(3)}"
     return None
 
 
 def extract_month_from_id(complaint_id: str) -> int | None:
     """Extract month number from complaint ID like G260324001 -> 3."""
-    m = re.match(r'G\d{2}(\d{2})\d{2}\d+', complaint_id)
+    m = re.match(r'[A-Za-z]\d{2}(\d{2})\d{2}\d+', complaint_id)
     if m:
         return int(m.group(1))
     return None
+
+
+def extract_source_from_id(complaint_id: str) -> str | None:
+    """Extract source prefix letter from complaint ID."""
+    if complaint_id and len(complaint_id) > 0 and complaint_id[0].isalpha():
+        return complaint_id[0].upper()
+    return None
+
+
+def _yymmdd(date_str: str) -> str:
+    """Convert YYYY-MM-DD to YYMMDD for complaint_id comparison."""
+    parts = date_str.split("-")
+    return parts[0][2:] + parts[1] + parts[2]
 
 
 MONTH_NAMES = {
@@ -148,11 +170,29 @@ MONTH_NAMES = {
 }
 
 
-async def get_monthly_dynamics(db: AsyncSession) -> list[dict]:
+def _apply_filters(query, org: str | None = None, date_from: str | None = None, date_to: str | None = None):
+    """Apply org and date filters. Dates are YYYY-MM-DD format."""
+    if org:
+        query = query.where(Complaint.responding_org == org)
+    if date_from:
+        yymmdd = _yymmdd(date_from)
+        query = query.where(func.substring(Complaint.complaint_id, 2, 6) >= yymmdd)
+    if date_to:
+        yymmdd = _yymmdd(date_to)
+        query = query.where(func.substring(Complaint.complaint_id, 2, 6) <= yymmdd)
+    return query
+
+
+# Keep backward compat alias
+def _org_filter(query, org: str | None):
+    """Apply responding_org filter if specified."""
+    return _apply_filters(query, org=org)
+
+
+async def get_monthly_dynamics(db: AsyncSession, org: str | None = None, date_from: str | None = None, date_to: str | None = None) -> list[dict]:
     """Monthly complaint dynamics grouped by type (ӨГ, Гомдол, Зөрчил)."""
-    rows = (await db.execute(
-        select(Complaint.complaint_id, Complaint.complaint_type)
-    )).all()
+    q = select(Complaint.complaint_id, Complaint.complaint_type)
+    rows = (await db.execute(_apply_filters(q, org, date_from, date_to))).all()
 
     # Count by month and type
     month_type: dict[int, Counter] = defaultdict(Counter)
@@ -187,11 +227,10 @@ async def get_monthly_dynamics(db: AsyncSession) -> list[dict]:
 
 # ── Database analytics queries ──────────────────────────────────────────────
 
-async def get_trend_analysis(db: AsyncSession) -> dict:
+async def get_trend_analysis(db: AsyncSession, org: str | None = None, date_from: str | None = None, date_to: str | None = None) -> dict:
     """Analyze complaint trends by date and category."""
-    rows = (await db.execute(
-        select(Complaint.complaint_id, Complaint.category, Complaint.resolution_status)
-    )).all()
+    q = select(Complaint.complaint_id, Complaint.category, Complaint.resolution_status)
+    rows = (await db.execute(_apply_filters(q, org, date_from, date_to))).all()
 
     daily: dict[str, int] = Counter()
     daily_by_cat: dict[str, Counter] = defaultdict(Counter)
@@ -260,19 +299,18 @@ async def get_trend_analysis(db: AsyncSession) -> dict:
     }
 
 
-async def get_resolution_analysis(db: AsyncSession) -> dict:
+async def get_resolution_analysis(db: AsyncSession, org: str | None = None, date_from: str | None = None, date_to: str | None = None) -> dict:
     """Analyze resolution patterns."""
-    all_rows = (await db.execute(
-        select(
-            Complaint.category,
-            Complaint.district,
-            Complaint.resolution_status,
-            Complaint.responding_org,
-            Complaint.officer,
-            Complaint.response,
-            Complaint.response_method,
-        )
-    )).all()
+    q = select(
+        Complaint.category,
+        Complaint.district,
+        Complaint.resolution_status,
+        Complaint.responding_org,
+        Complaint.officer,
+        Complaint.response,
+        Complaint.response_method,
+    )
+    all_rows = (await db.execute(_apply_filters(q, org, date_from, date_to))).all()
 
     # Resolution rate by category
     cat_stats: dict[str, dict] = defaultdict(lambda: {"resolved": 0, "total": 0})
@@ -344,20 +382,19 @@ async def get_resolution_analysis(db: AsyncSession) -> dict:
     }
 
 
-async def get_content_classification(db: AsyncSession) -> dict:
+async def get_content_classification(db: AsyncSession, org: str | None = None, date_from: str | None = None, date_to: str | None = None) -> dict:
     """Classify complaints by content themes and detect edges."""
-    rows = (await db.execute(
-        select(
-            Complaint.id,
-            Complaint.complaint_id,
-            Complaint.complaint_number,
-            Complaint.category,
-            Complaint.description,
-            Complaint.citizen_name,
-            Complaint.district,
-            Complaint.resolution_status,
-        )
-    )).all()
+    q = select(
+        Complaint.id,
+        Complaint.complaint_id,
+        Complaint.complaint_number,
+        Complaint.category,
+        Complaint.description,
+        Complaint.citizen_name,
+        Complaint.district,
+        Complaint.resolution_status,
+    )
+    rows = (await db.execute(_apply_filters(q, org, date_from, date_to))).all()
 
     # Theme classification
     theme_counts: Counter = Counter()
@@ -420,12 +457,24 @@ async def get_content_classification(db: AsyncSession) -> dict:
     }
 
 
-async def get_insights(db: AsyncSession) -> list[dict]:
+async def get_insights(db: AsyncSession, org: str | None = None, date_from: str | None = None, date_to: str | None = None) -> list[dict]:
     """Generate human-readable insights from the data."""
-    total = (await db.execute(select(func.count(Complaint.id)))).scalar() or 0
-    resolved = (await db.execute(
-        select(func.count(Complaint.id)).where(Complaint.resolution_status.isnot(None))
-    )).scalar() or 0
+    total_q = select(func.count(Complaint.id))
+    resolved_q = select(func.count(Complaint.id)).where(Complaint.resolution_status.isnot(None))
+    if org:
+        total_q = total_q.where(Complaint.responding_org == org)
+        resolved_q = resolved_q.where(Complaint.responding_org == org)
+    if date_from:
+        yymmdd = _yymmdd(date_from)
+        total_q = total_q.where(func.substring(Complaint.complaint_id, 2, 6) >= yymmdd)
+        resolved_q = resolved_q.where(func.substring(Complaint.complaint_id, 2, 6) >= yymmdd)
+    if date_to:
+        yymmdd = _yymmdd(date_to)
+        total_q = total_q.where(func.substring(Complaint.complaint_id, 2, 6) <= yymmdd)
+        resolved_q = resolved_q.where(func.substring(Complaint.complaint_id, 2, 6) <= yymmdd)
+
+    total = (await db.execute(total_q)).scalar() or 0
+    resolved = (await db.execute(resolved_q)).scalar() or 0
 
     if total == 0:
         return []
@@ -442,14 +491,16 @@ async def get_insights(db: AsyncSession) -> list[dict]:
         })
 
     # Top unresolved category
-    cat_rows = (await db.execute(
+    cat_q = (
         select(Complaint.category, func.count(Complaint.id).label("cnt"))
         .where(Complaint.resolution_status.is_(None))
         .where(Complaint.category.isnot(None))
         .group_by(Complaint.category)
         .order_by(text("cnt DESC"))
         .limit(3)
-    )).all()
+    )
+    cat_q = _apply_filters(cat_q, org, date_from, date_to)
+    cat_rows = (await db.execute(cat_q)).all()
     if cat_rows:
         top_cat = cat_rows[0]
         insights.append({
@@ -459,13 +510,15 @@ async def get_insights(db: AsyncSession) -> list[dict]:
         })
 
     # District concentration
-    dist_rows = (await db.execute(
+    dist_q = (
         select(Complaint.district, func.count(Complaint.id).label("cnt"))
         .where(Complaint.district.isnot(None))
         .group_by(Complaint.district)
         .order_by(text("cnt DESC"))
         .limit(1)
-    )).all()
+    )
+    dist_q = _apply_filters(dist_q, org, date_from, date_to)
+    dist_rows = (await db.execute(dist_q)).all()
     if dist_rows:
         top_dist = dist_rows[0]
         pct = round(top_dist[1] / total * 100, 1)
@@ -476,19 +529,20 @@ async def get_insights(db: AsyncSession) -> list[dict]:
         })
 
     # Categories with 0% resolution
-    zero_cats = (await db.execute(
+    zero_q = (
         select(Complaint.category, func.count(Complaint.id).label("cnt"))
         .where(Complaint.resolution_status.is_(None))
         .where(Complaint.category.isnot(None))
         .group_by(Complaint.category)
         .having(func.count(Complaint.id) >= 5)
         .order_by(text("cnt DESC"))
-    )).all()
+    )
+    zero_q = _apply_filters(zero_q, org, date_from, date_to)
+    zero_cats = (await db.execute(zero_q)).all()
 
-    resolved_cats = set()
-    res_rows = (await db.execute(
-        select(Complaint.category).where(Complaint.resolution_status.isnot(None)).distinct()
-    )).scalars().all()
+    res_q = select(Complaint.category).where(Complaint.resolution_status.isnot(None)).distinct()
+    res_q = _apply_filters(res_q, org, date_from, date_to)
+    res_rows = (await db.execute(res_q)).scalars().all()
     resolved_cats = set(res_rows)
 
     fully_unresolved = [c for c in zero_cats if c[0] not in resolved_cats]
@@ -503,21 +557,227 @@ async def get_insights(db: AsyncSession) -> list[dict]:
     return insights
 
 
-async def get_report(db: AsyncSession) -> dict:
+# ── Detailed content-based categorization ─────────────────────────────────
+
+DETAILED_CATEGORIES: dict[str, list[str]] = {
+    "Туулын хурдны зам эсэргүүцэл": [
+        "туулын хурдны зам", "туул гол дээгүүр", "хурдны замыг эсэргүүц",
+        "туул голын", "бургас", "бургасыг устга", "бургас тайр",
+        "туулын хурдны", "тэзү",
+    ],
+    "Нүүрс, түлшний хангамж, Хотула апп": [
+        "нүүрс", "түлээ", "хотула", "түлш", "шахмал түлш",
+        "сайжруулсан түлш", "таван толгой",
+    ],
+    "Торгуулийн зөрчил, хүчингүй болгох хүсэлт": [
+        "торгууль", "торгуулийн", "торгосон", "зөрчлийн мэдэгдэл",
+    ],
+    "ТҮЦ, павильон зөвшөөрөлгүй байршуулсан": [
+        "түц", "павильон", "ил задгай худалдаа", "зөвшөөрөлгүй худалдаа",
+        "түргэн үйлчилгээний цэг",
+    ],
+    "Цагдаагийн байгууллагын ажиллагааны гомдол": [
+        "цагдаагийн", "мөрдөгч", "хэсгийн байцаагч", "хэсгийн төлөөлөгч",
+    ],
+    "Гэмт хэрэг, цахим залилан, хулгай": [
+        "гэмт хэрэг", "залилан", "хулгай", "дээрэм", "зодож",
+        "цохиж", "хүчирхийлэл",
+    ],
+    "Сургууль, багшийн зөрчил, хандив хураалт": [
+        "сургууль", "багш", "сурагч", "хандив", "ангийн зардал",
+        "төгсөлт", "шалгалт", "алагд", "гар хүр",
+    ],
+    "Цэцэрлэгийн үйлчилгээний гомдол": [
+        "цэцэрлэг", "цэцэрлэгийн",
+    ],
+    "Эмнэлэг, эрүүл мэндийн тусламж үйлчилгээ": [
+        "эмнэлэг", "эмч", "өрхийн эрүүл", "тариа", "вакцин",
+        "оношилгоо", "эм дуус", "эмчилгээ",
+    ],
+    "Халуун, хүйтэн усны хангамжийн доголдол": [
+        "халуун ус", "хүйтэн ус", "усгүй", "ус тасар",
+        "зэвтэй ус", "усан хангамж",
+    ],
+    "Цахилгааны тасалгаа, хязгаарлалт": [
+        "цахилгаан", "тог тасал", "эрчим хүч",
+    ],
+    "Халаалт, дулааны доголдол": [
+        "халаалт", "дулаан", "алчуур хатаагч",
+    ],
+    "Барилгын норм зөрчил, аюулгүй байдал": [
+        "барилгын норм", "барилгажилт", "нормыг зөрчиж",
+        "даацын хана", "зөвшөөрөлгүй барилга", "метр хүрэхгүй газарт барилга",
+    ],
+    "Авто зогсоол, төлбөрт зогсоолын гомдол": [
+        "зогсоол", "авто зогсоол", "төлбөртэй зогсоол",
+        "машин тавих газар",
+    ],
+    "Газар чөлөөлөх, газрын маргаан": [
+        "газар чөлөөл", "газрын маргаан", "газрын эрх",
+        "газар зохион байгуулалт",
+    ],
+    "Орон сууцны контор, СӨХ-ын үйлчилгээ": [
+        "сөх", "орон сууцны контор", "конторын төлбөр",
+        "дээврийн засвар", "лифт",
+    ],
+    "Бохир ус, хог хаягдал, орчны бохирдол": [
+        "бохир", "хог", "бохирдол", "агаарын бохирдол",
+        "хог цэвэрлэгээ", "хог тээвэр", "үнэр",
+    ],
+    "Замын засвар, эвдрэл, тохижилт": [
+        "замын засвар", "зам эвдрэл", "нүхтэй", "шороо тоос",
+        "явган хүний зам", "траншей",
+    ],
+    "Гэрэлтүүлэг, нүхэн гарцын гэрэл": [
+        "гэрэлтүүлэг", "нүхэн гарц", "харанхуй",
+    ],
+    "Нийтийн тээвэр, автобусны үйлчилгээ": [
+        "автобус", "нийтийн тээвр", "чиглэл", "жолооч",
+    ],
+    "Замын хөдөлгөөний түгжрэл, гэрлэн дохио": [
+        "түгжрэл", "гэрлэн дохио", "хурд сааруулагч", "давхар зураас",
+    ],
+    "Засаг захиргааны байгууллагын үйлчилгээ": [
+        "засаг дарга", "тамгын газар", "ёс зүй", "харилцаа хандлага",
+    ],
+    "Худалдаа, хүнсний чанар аюулгүй байдал": [
+        "дэлгүүр", "худалдааны төв", "мах", "хүнс", "хоолны газар",
+    ],
+    "Архи, тамхины зөвшөөрөл, хяналт": [
+        "архи", "тамхи", "согтууруулах ундаа",
+    ],
+    "Нийгмийн халамж, хөдөлмөр эрхлэлт": [
+        "халамж", "тэтгэвэр", "тэтгэмж", "хөдөлмөр",
+        "асаргаа", "амралтын мөнгө",
+    ],
+    "Дахин төлөвлөлт, орон сууцны бодлого": [
+        "дахин төлөвлөлт", "орон сууцжуулах", "гэр хороолол",
+    ],
+    "Золбин амьтан, байгаль хамгаалал": [
+        "золбин нохой", "мод тайр", "байгаль",
+    ],
+    "Тээврийн хэрэгсэл ачих, журамлах": [
+        "ачиж журамла", "ачиж", "журамлах",
+    ],
+}
+
+
+def classify_by_content(description: str | None) -> list[str]:
+    """Classify complaint into detailed categories based on description text."""
+    if not description:
+        return []
+    lower = description.lower()
+    matched: list[str] = []
+    for category, keywords in DETAILED_CATEGORIES.items():
+        for kw in keywords:
+            if kw.lower() in lower:
+                matched.append(category)
+                break
+    return matched
+
+
+async def get_category_detail_analysis(db: AsyncSession, org: str | None = None, date_from: str | None = None, date_to: str | None = None) -> dict:
+    """Analyze complaints by content-derived categories with responses and org breakdown."""
+    q = select(
+        Complaint.complaint_id,
+        Complaint.complaint_number,
+        Complaint.description,
+        Complaint.response,
+        Complaint.resolution_status,
+        Complaint.responding_org,
+        Complaint.category,
+    )
+    rows = (await db.execute(_apply_filters(q, org, date_from, date_to))).all()
+
+    cat_data: dict[str, dict] = defaultdict(lambda: {
+        "complaints": [],
+        "responses": [],
+        "orgs": Counter(),
+        "resolved": 0,
+        "total": 0,
+        "statuses": Counter(),
+    })
+
+    for cid, num, desc, resp, status, org, orig_cat in rows:
+        categories = classify_by_content(desc)
+        if not categories:
+            continue
+
+        for cat in categories:
+            d = cat_data[cat]
+            d["total"] += 1
+
+            if len(d["complaints"]) < 3:
+                d["complaints"].append({
+                    "complaint_id": cid,
+                    "complaint_number": num,
+                    "description": (desc or "")[:200] + ("..." if desc and len(desc) > 200 else ""),
+                })
+
+            if resp and len(d["responses"]) < 3:
+                d["responses"].append({
+                    "complaint_number": num,
+                    "response": (resp or "")[:200] + ("..." if resp and len(resp) > 200 else ""),
+                })
+
+            if status:
+                d["resolved"] += 1
+                d["statuses"][status] += 1
+
+            org_clean = org or "Тодорхойгүй"
+            if org_clean in ("null, null", "null"):
+                org_clean = "Тодорхойгүй"
+            d["orgs"][org_clean] += 1
+
+    categories_result = []
+    for cat_name, data in sorted(cat_data.items(), key=lambda x: x[1]["total"], reverse=True):
+        if data["total"] == 0:
+            continue
+        rate = round(data["resolved"] / data["total"] * 100, 1) if data["total"] > 0 else 0
+        categories_result.append({
+            "category": cat_name,
+            "count": data["total"],
+            "resolved": data["resolved"],
+            "pending": data["total"] - data["resolved"],
+            "resolution_rate": rate,
+            "sample_complaints": data["complaints"],
+            "sample_responses": data["responses"],
+            "response_given": len(data["responses"]) > 0,
+            "statuses": [{"status": s, "count": c} for s, c in data["statuses"].most_common()],
+            "orgs": [{"org": o, "count": c} for o, c in data["orgs"].most_common(5)],
+        })
+
+    all_org_counts: Counter = Counter()
+    for _, _, _, _, _, org, _ in rows:
+        org_clean = org or "Тодорхойгүй"
+        if org_clean in ("null, null", "null"):
+            org_clean = "Тодорхойгүй"
+        all_org_counts[org_clean] += 1
+
+    org_table = [{"org": o, "count": c} for o, c in all_org_counts.most_common(25)]
+
+    return {
+        "categories": categories_result,
+        "total_complaints": len(rows),
+        "categorized_count": sum(d["total"] for d in cat_data.values()),
+        "org_table": org_table,
+    }
+
+
+async def get_report(db: AsyncSession, org: str | None = None, date_from: str | None = None, date_to: str | None = None) -> dict:
     """Generate a full report matching the PDF analysis format."""
-    rows = (await db.execute(
-        select(
-            Complaint.complaint_id,
-            Complaint.complaint_type,
-            Complaint.category,
-            Complaint.district,
-            Complaint.resolution_status,
-            Complaint.responding_org,
-            Complaint.officer,
-            Complaint.response,
-            Complaint.report_date_range,
-        )
-    )).all()
+    q = select(
+        Complaint.complaint_id,
+        Complaint.complaint_type,
+        Complaint.category,
+        Complaint.district,
+        Complaint.resolution_status,
+        Complaint.responding_org,
+        Complaint.officer,
+        Complaint.response,
+        Complaint.report_date_range,
+    )
+    rows = (await db.execute(_apply_filters(q, org, date_from, date_to))).all()
 
     total = len(rows)
     if total == 0:
@@ -627,4 +887,281 @@ async def get_report(db: AsyncSession) -> dict:
         "category_table": category_table,
         "district_table": district_table,
         "responding_org_table": responding_org_table,
+    }
+
+
+# ── Source analysis (by complaint_id prefix) ────────────────────────────────
+
+async def get_source_analysis(db: AsyncSession, org: str | None = None, date_from: str | None = None, date_to: str | None = None) -> dict:
+    """Analyze complaints by source prefix (G, C, M, J, W)."""
+    q = select(Complaint.complaint_id)
+    rows = (await db.execute(_apply_filters(q, org, date_from, date_to))).scalars().all()
+
+    source_counts: Counter = Counter()
+    for cid in rows:
+        prefix = extract_source_from_id(cid)
+        if prefix:
+            source_counts[prefix] += 1
+
+    total = sum(source_counts.values())
+    sources = [
+        {
+            "prefix": prefix,
+            "name": SOURCE_PREFIXES.get(prefix, prefix),
+            "count": cnt,
+            "pct": round(cnt / total * 100, 1) if total else 0,
+        }
+        for prefix, cnt in source_counts.most_common()
+    ]
+
+    return {"sources": sources, "total": total}
+
+
+# ── Daily dynamics with trend + spike annotations ───────────────────────────
+
+async def get_daily_dynamics(db: AsyncSession, org: str | None = None, date_from: str | None = None, date_to: str | None = None) -> dict:
+    """Daily complaint counts with trend line data and spike annotations."""
+    q = select(Complaint.complaint_id, Complaint.description, Complaint.category)
+    rows = (await db.execute(_apply_filters(q, org, date_from, date_to))).all()
+
+    daily_counts: Counter = Counter()
+    daily_cats: dict[str, Counter] = defaultdict(Counter)
+    daily_sources: dict[str, Counter] = defaultdict(Counter)
+
+    for cid, desc, cat in rows:
+        d = extract_date_from_id(cid)
+        if not d:
+            continue
+        daily_counts[d] += 1
+        # Classify by content for annotation
+        cats = classify_by_content(desc)
+        for c in cats:
+            daily_cats[d][c] += 1
+        # Source
+        src = extract_source_from_id(cid)
+        if src:
+            daily_sources[d][src] += 1
+
+    sorted_dates = sorted(daily_counts.keys())
+    if not sorted_dates:
+        return {"daily": [], "annotations": []}
+
+    # Compute average and std for spike detection
+    counts = [daily_counts[d] for d in sorted_dates]
+    avg = sum(counts) / len(counts) if counts else 0
+    std = (sum((c - avg) ** 2 for c in counts) / len(counts)) ** 0.5 if len(counts) > 1 else 0
+
+    daily = []
+    annotations = []
+    for i, d in enumerate(sorted_dates):
+        cnt = daily_counts[d]
+        # Moving average (3-day)
+        window = [daily_counts[sorted_dates[j]] for j in range(max(0, i - 1), min(len(sorted_dates), i + 2))]
+        ma = round(sum(window) / len(window), 1)
+
+        entry = {
+            "date": d,
+            "count": cnt,
+            "trend": ma,
+        }
+        # Add source breakdown
+        for prefix in SOURCE_PREFIXES:
+            entry[prefix] = daily_sources[d].get(prefix, 0)
+
+        daily.append(entry)
+
+        # Detect spikes: count > avg + 1*std
+        if std > 0 and cnt > avg + std:
+            top_cat = daily_cats[d].most_common(1)
+            annotations.append({
+                "date": d,
+                "count": cnt,
+                "reason": top_cat[0][0] if top_cat else "Бусад",
+                "reason_count": top_cat[0][1] if top_cat else 0,
+            })
+        # Detect drops: count < avg - 1*std (and avg is meaningful)
+        elif std > 0 and cnt < avg - std and avg > 3:
+            annotations.append({
+                "date": d,
+                "count": cnt,
+                "reason": "Бага өдөр",
+                "reason_count": cnt,
+            })
+
+    return {"daily": daily, "annotations": annotations}
+
+
+# ── Category grouping (parent -> sub-categories) ───────────────────────────
+
+CATEGORY_GROUPS: dict[str, list[str]] = {
+    "Зам, тээвэр, зогсоол": [
+        "Замын хөдөлгөөний түгжрэл, гэрлэн дохио",
+        "Замын засвар, эвдрэл, тохижилт",
+        "Нийтийн тээвэр, автобусны үйлчилгээ",
+        "Авто зогсоол, төлбөрт зогсоолын гомдол",
+        "Тээврийн хэрэгсэл ачих, журамлах",
+    ],
+    "Хууль, цагдаа, торгууль": [
+        "Цагдаагийн байгууллагын ажиллагааны гомдол",
+        "Гэмт хэрэг, цахим залилан, хулгай",
+        "Торгуулийн зөрчил, хүчингүй болгох хүсэлт",
+    ],
+    "Боловсрол": [
+        "Сургууль, багшийн зөрчил, хандив хураалт",
+        "Цэцэрлэгийн үйлчилгээний гомдол",
+    ],
+    "Эрүүл мэнд": [
+        "Эмнэлэг, эрүүл мэндийн тусламж үйлчилгээ",
+    ],
+    "Дэд бүтэц (ус, дулаан, цахилгаан)": [
+        "Халуун, хүйтэн усны хангамжийн доголдол",
+        "Цахилгааны тасалгаа, хязгаарлалт",
+        "Халаалт, дулааны доголдол",
+    ],
+    "Барилга, газар, орон сууц": [
+        "Барилгын норм зөрчил, аюулгүй байдал",
+        "Газар чөлөөлөх, газрын маргаан",
+        "Орон сууцны контор, СӨХ-ын үйлчилгээ",
+        "Дахин төлөвлөлт, орон сууцны бодлого",
+    ],
+    "Түлш, нүүрс": [
+        "Нүүрс, түлшний хангамж, Хотула апп",
+    ],
+    "Худалдаа, үйлчилгээ": [
+        "ТҮЦ, павильон зөвшөөрөлгүй байршуулсан",
+        "Худалдаа, хүнсний чанар аюулгүй байдал",
+        "Архи, тамхины зөвшөөрөл, хяналт",
+    ],
+    "Байгаль орчин": [
+        "Туулын хурдны зам эсэргүүцэл",
+        "Бохир ус, хог хаягдал, орчны бохирдол",
+        "Золбин амьтан, байгаль хамгаалал",
+        "Гэрэлтүүлэг, нүхэн гарцын гэрэл",
+    ],
+    "Засаг захиргаа, нийгмийн халамж": [
+        "Засаг захиргааны байгууллагын үйлчилгээ",
+        "Нийгмийн халамж, хөдөлмөр эрхлэлт",
+    ],
+}
+
+
+async def get_grouped_categories(db: AsyncSession, org: str | None = None, date_from: str | None = None, date_to: str | None = None) -> dict:
+    """Get category analysis grouped into parent groups."""
+    q = select(
+        Complaint.complaint_id,
+        Complaint.description,
+        Complaint.response,
+        Complaint.resolution_status,
+        Complaint.responding_org,
+    )
+    rows = (await db.execute(_apply_filters(q, org, date_from, date_to))).all()
+
+    # Classify all complaints
+    sub_cat_data: dict[str, dict] = defaultdict(lambda: {"total": 0, "resolved": 0})
+
+    for cid, desc, resp, status, r_org in rows:
+        cats = classify_by_content(desc)
+        # Also classify by response text
+        if resp:
+            resp_cats = classify_by_content(resp)
+            for rc in resp_cats:
+                if rc not in cats:
+                    cats.append(rc)
+        for cat in cats:
+            sub_cat_data[cat]["total"] += 1
+            if status:
+                sub_cat_data[cat]["resolved"] += 1
+
+    # Build grouped result
+    groups = []
+    for group_name, sub_cat_names in CATEGORY_GROUPS.items():
+        sub_cats = []
+        group_total = 0
+        group_resolved = 0
+        for sc_name in sub_cat_names:
+            d = sub_cat_data.get(sc_name)
+            if d and d["total"] > 0:
+                rate = round(d["resolved"] / d["total"] * 100, 1)
+                sub_cats.append({
+                    "category": sc_name,
+                    "count": d["total"],
+                    "resolved": d["resolved"],
+                    "resolution_rate": rate,
+                })
+                group_total += d["total"]
+                group_resolved += d["resolved"]
+
+        if group_total > 0:
+            groups.append({
+                "group": group_name,
+                "count": group_total,
+                "resolved": group_resolved,
+                "resolution_rate": round(group_resolved / group_total * 100, 1) if group_total else 0,
+                "sub_categories": sorted(sub_cats, key=lambda x: x["count"], reverse=True),
+            })
+
+    groups.sort(key=lambda x: x["count"], reverse=True)
+    return {"groups": groups, "total_classified": sum(g["count"] for g in groups)}
+
+
+# ── Org detail: categories for a specific org ───────────────────────────────
+
+async def get_org_detail(db: AsyncSession, org: str, date_from: str | None = None, date_to: str | None = None) -> dict:
+    """Get detailed category breakdown for a specific responding org."""
+    q = select(
+        Complaint.complaint_id,
+        Complaint.description,
+        Complaint.response,
+        Complaint.category,
+        Complaint.resolution_status,
+    ).where(Complaint.responding_org == org)
+    if date_from:
+        q = q.where(func.substring(Complaint.complaint_id, 2, 6) >= _yymmdd(date_from))
+    if date_to:
+        q = q.where(func.substring(Complaint.complaint_id, 2, 6) <= _yymmdd(date_to))
+
+    rows = (await db.execute(q)).all()
+
+    # Content-based classification
+    cat_data: dict[str, dict] = defaultdict(lambda: {"total": 0, "resolved": 0})
+    # Also original Excel categories
+    orig_cat_counts: Counter = Counter()
+
+    for cid, desc, resp, orig_cat, status in rows:
+        cats = classify_by_content(desc)
+        if resp:
+            resp_cats = classify_by_content(resp)
+            for rc in resp_cats:
+                if rc not in cats:
+                    cats.append(rc)
+        for cat in cats:
+            cat_data[cat]["total"] += 1
+            if status:
+                cat_data[cat]["resolved"] += 1
+        if orig_cat:
+            orig_cat_counts[orig_cat] += 1
+
+    categories = []
+    for cat_name, d in sorted(cat_data.items(), key=lambda x: x[1]["total"], reverse=True):
+        if d["total"] > 0:
+            categories.append({
+                "category": cat_name,
+                "count": d["total"],
+                "resolved": d["resolved"],
+                "resolution_rate": round(d["resolved"] / d["total"] * 100, 1),
+            })
+
+    original_categories = [
+        {"category": cat, "count": cnt}
+        for cat, cnt in orig_cat_counts.most_common(20)
+    ]
+
+    resolved = sum(1 for _, _, _, _, s in rows if s)
+    return {
+        "org": org,
+        "total": len(rows),
+        "resolved": resolved,
+        "resolution_rate": round(resolved / len(rows) * 100, 1) if rows else 0,
+        "content_categories": categories,
+        "original_categories": original_categories,
     }

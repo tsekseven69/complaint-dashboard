@@ -6,7 +6,7 @@ import {
 } from 'recharts'
 import { AlertTriangle, TrendingUp, TrendingDown, Minus, Shield, Tag, Activity } from 'lucide-react'
 import {
-  TrendAnalysis, ResolutionAnalysis, ContentClassification, Insight,
+  FilterParams, TrendAnalysis, ResolutionAnalysis, ContentClassification, Insight,
   fetchTrends, fetchResolution, fetchContent, fetchInsights,
 } from '../api/client'
 
@@ -22,7 +22,7 @@ const INSIGHT_STYLES: Record<string, { bg: string; border: string; color: string
   danger: { bg: '#fce8e6', border: '#ea4335', color: '#c5221f', icon: 'danger' },
 }
 
-export default function Analytics() {
+export default function Analytics({ fp }: { fp: FilterParams }) {
   const [trends, setTrends] = useState<TrendAnalysis | null>(null)
   const [resolution, setResolution] = useState<ResolutionAnalysis | null>(null)
   const [content, setContent] = useState<ContentClassification | null>(null)
@@ -31,11 +31,12 @@ export default function Analytics() {
   const [subTab, setSubTab] = useState<'trends' | 'resolution' | 'content' | 'edges'>('trends')
 
   useEffect(() => {
+    setLoading(true)
     Promise.all([
-      fetchTrends().catch(() => null),
-      fetchResolution().catch(() => null),
-      fetchContent().catch(() => null),
-      fetchInsights().catch(() => []),
+      fetchTrends(fp).catch(() => null),
+      fetchResolution(fp).catch(() => null),
+      fetchContent(fp).catch(() => null),
+      fetchInsights(fp).catch(() => []),
     ]).then(([t, r, c, i]) => {
       setTrends(t)
       setResolution(r)
@@ -43,7 +44,7 @@ export default function Analytics() {
       setInsights(i as Insight[])
       setLoading(false)
     })
-  }, [])
+  }, [fp])
 
   if (loading) return <div className="loading"><div className="spinner" /></div>
 

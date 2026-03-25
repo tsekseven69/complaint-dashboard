@@ -169,6 +169,19 @@ async def upsert_complaints(
     )
 
 
+def _apply_date_filter(query, date_from: str | None, date_to: str | None):
+    """Apply date filters based on complaint_id substring."""
+    if date_from:
+        parts = date_from.split("-")
+        yymmdd = parts[0][2:] + parts[1] + parts[2]
+        query = query.where(func.substring(Complaint.complaint_id, 2, 6) >= yymmdd)
+    if date_to:
+        parts = date_to.split("-")
+        yymmdd = parts[0][2:] + parts[1] + parts[2]
+        query = query.where(func.substring(Complaint.complaint_id, 2, 6) <= yymmdd)
+    return query
+
+
 async def get_complaints(
     db: AsyncSession,
     page: int = 1,
@@ -177,10 +190,17 @@ async def get_complaints(
     category: str | None = None,
     status: str | None = None,
     search: str | None = None,
+    org: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> tuple[list[Complaint], int]:
     """Get paginated complaints with optional filters."""
     query = select(Complaint)
     count_query = select(func.count(Complaint.id))
+
+    if date_from or date_to:
+        query = _apply_date_filter(query, date_from, date_to)
+        count_query = _apply_date_filter(count_query, date_from, date_to)
 
     if district:
         query = query.where(Complaint.district == district)
@@ -188,6 +208,9 @@ async def get_complaints(
     if category:
         query = query.where(Complaint.category == category)
         count_query = count_query.where(Complaint.category == category)
+    if org:
+        query = query.where(Complaint.responding_org == org)
+        count_query = count_query.where(Complaint.responding_org == org)
     if status == "resolved":
         query = query.where(Complaint.resolution_status.isnot(None))
         count_query = count_query.where(Complaint.resolution_status.isnot(None))
@@ -217,19 +240,27 @@ async def get_complaints(
     return list(result.scalars().all()), total
 
 
-async def get_dashboard_stats(db: AsyncSession) -> DashboardStats:
+async def get_dashboard_stats(
+    db: AsyncSession,
+    org: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> DashboardStats:
     """Compute dashboard statistics."""
-    total = (
-        await db.execute(select(func.count(Complaint.id)))
-    ).scalar() or 0
+    base = select(func.count(Complaint.id))
+    if org:
+        base = base.where(Complaint.responding_org == org)
+    base = _apply_date_filter(base, date_from, date_to)
 
-    resolved = (
-        await db.execute(
-            select(func.count(Complaint.id)).where(
-                Complaint.resolution_status.isnot(None)
-            )
-        )
-    ).scalar() or 0
+    total = (await db.execute(base)).scalar() or 0
+
+    resolved_q = select(func.count(Complaint.id)).where(
+        Complaint.resolution_status.isnot(None)
+    )
+    if org:
+        resolved_q = resolved_q.where(Complaint.responding_org == org)
+    resolved_q = _apply_date_filter(resolved_q, date_from, date_to)
+    resolved = (await db.execute(resolved_q)).scalar() or 0
 
     pending = total - resolved
     resolution_rate = (resolved / total * 100) if total > 0 else 0.0
@@ -242,6 +273,9 @@ async def get_dashboard_stats(db: AsyncSession) -> DashboardStats:
         .order_by(text("cnt DESC"))
         .limit(20)
     )
+    if org:
+        cat_q = cat_q.where(Complaint.responding_org == org)
+    cat_q = _apply_date_filter(cat_q, date_from, date_to)
     cat_rows = (await db.execute(cat_q)).all()
     by_category = [CategoryStat(category=r[0], count=r[1]) for r in cat_rows]
 
@@ -252,6 +286,9 @@ async def get_dashboard_stats(db: AsyncSession) -> DashboardStats:
         .group_by(Complaint.district)
         .order_by(text("cnt DESC"))
     )
+    if org:
+        dist_q = dist_q.where(Complaint.responding_org == org)
+    dist_q = _apply_date_filter(dist_q, date_from, date_to)
     dist_rows = (await db.execute(dist_q)).all()
     by_district = [DistrictStat(district=r[0], count=r[1]) for r in dist_rows]
 
@@ -302,4 +339,17 @@ async def get_filter_options(db: AsyncSession) -> dict:
         )
     ).scalars().all()
 
-    return {"districts": list(districts), "categories": list(categories)}
+    responding_orgs = (
+        await db.execute(
+            select(Complaint.responding_org)
+            .where(Complaint.responding_org.isnot(None))
+            .distinct()
+            .order_by(Complaint.responding_org)
+        )
+    ).scalars().all()
+
+    return {
+        "districts": list(districts),
+        "categories": list(categories),
+        "responding_orgs": list(responding_orgs),
+    }
