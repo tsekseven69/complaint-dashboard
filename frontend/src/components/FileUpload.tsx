@@ -1,29 +1,27 @@
 import { useCallback, useRef, useState } from 'react'
 import { Upload } from 'lucide-react'
-import { uploadExcel, UploadResult } from '../api/client'
 
 interface Props {
-  onUploadSuccess: (result: UploadResult) => void
+  onFile: (file: File) => Promise<void>
 }
 
-export default function FileUpload({ onUploadSuccess }: Props) {
+export default function FileUpload({ onFile }: Props) {
   const [dragging, setDragging] = useState(false)
-  const [uploading, setUploading] = useState(false)
+  const [processing, setProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const handleFile = useCallback(async (file: File) => {
     setError(null)
-    setUploading(true)
+    setProcessing(true)
     try {
-      const result = await uploadExcel(file)
-      onUploadSuccess(result)
+      await onFile(file)
     } catch (e: any) {
-      setError(e.message || 'Upload failed')
+      setError(e.message || 'Файл уншихад алдаа гарлаа')
     } finally {
-      setUploading(false)
+      setProcessing(false)
     }
-  }, [onUploadSuccess])
+  }, [onFile])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -49,7 +47,7 @@ export default function FileUpload({ onUploadSuccess }: Props) {
       >
         <input ref={inputRef} type="file" accept=".xlsx,.xls" onChange={onChange} />
         <Upload size={36} className="icon" />
-        {uploading ? (
+        {processing ? (
           <p>Файл уншиж байна...</p>
         ) : (
           <p>Excel файлаа энд чирж оруулах эсвэл дарж сонгоно уу (.xlsx)</p>

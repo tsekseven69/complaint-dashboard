@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { Search, ChevronLeft, ChevronRight, Eye } from 'lucide-react'
-import { Complaint, ComplaintList, FilterOptions, FilterParams, fetchComplaints, fetchFilters } from '../api/client'
+import type { Complaint } from '../lib/excelParser'
+import { computeFilters, getComplaints, type FilterParams } from '../lib/analytics'
 
 function ComplaintDetail({ complaint, onClose }: { complaint: Complaint; onClose: () => void }) {
   return (
@@ -77,9 +78,7 @@ function ComplaintDetail({ complaint, onClose }: { complaint: Complaint; onClose
   )
 }
 
-export default function ComplaintTable({ fp }: { fp: FilterParams }) {
-  const [data, setData] = useState<ComplaintList | null>(null)
-  const [filters, setFilters] = useState<FilterOptions | null>(null)
+export default function ComplaintTable({ complaints, fp }: { complaints: Complaint[]; fp: FilterParams }) {
   const [page, setPage] = useState(1)
   const [district, setDistrict] = useState('')
   const [category, setCategory] = useState('')
@@ -87,60 +86,46 @@ export default function ComplaintTable({ fp }: { fp: FilterParams }) {
   const [search, setSearch] = useState('')
   const [searchInput, setSearchInput] = useState('')
   const [selected, setSelected] = useState<Complaint | null>(null)
-  const [loading, setLoading] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await fetchComplaints({
-        page,
-        page_size: 30,
-        district: district || undefined,
-        category: category || undefined,
-        status: status || undefined,
-        search: search || undefined,
-        org: fp.org,
-        date_from: fp.date_from,
-        date_to: fp.date_to,
-      })
-      setData(result)
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false)
-    }
-  }, [page, district, category, status, search, fp])
+  const filters = useMemo(() => computeFilters(complaints), [complaints])
 
-  useEffect(() => {
-    load()
-  }, [load])
+  const data = useMemo(() => getComplaints(complaints, {
+    page, page_size: 30,
+    district: district || undefined,
+    category: category || undefined,
+    status: status || undefined,
+    search: search || undefined,
+    org: fp.org,
+    date_from: fp.date_from,
+    date_to: fp.date_to,
+  }), [complaints, page, district, category, status, search, fp])
 
-  useEffect(() => {
-    fetchFilters().then(setFilters).catch(() => {})
-  }, [])
+  const totalPages = Math.ceil(data.total / data.page_size)
 
-  const totalPages = data ? Math.ceil(data.total / data.page_size) : 0
-
-  const handleSearch = () => {
+  const handleSearch = useCallback(() => {
     setSearch(searchInput)
     setPage(1)
+  }, [searchInput])
+
+  if (complaints.length === 0) {
+    return <div className="empty-state"><p>Мэдээлэл олдсонгүй. Excel файл оруулна уу.</p></div>
   }
 
   return (
     <div className="table-card">
-      <h3>Гомдлын жагсаалт ({data?.total ?? 0})</h3>
+      <h3>Гомдлын жагсаалт ({data.total})</h3>
 
       <div className="filters-bar" style={{ padding: '0 20px 16px' }}>
         <select value={district} onChange={(e) => { setDistrict(e.target.value); setPage(1) }}>
           <option value="">Бүх дүүрэг</option>
-          {filters?.districts.map((d) => (
+          {filters.districts.map((d) => (
             <option key={d} value={d}>{d}</option>
           ))}
         </select>
 
         <select value={category} onChange={(e) => { setCategory(e.target.value); setPage(1) }}>
           <option value="">Бүх ангилал</option>
-          {filters?.categories.map((c) => (
+          {filters.categories.map((c) => (
             <option key={c} value={c}>{c.length > 60 ? c.slice(0, 60) + '...' : c}</option>
           ))}
         </select>
@@ -159,29 +144,17 @@ export default function ComplaintTable({ fp }: { fp: FilterParams }) {
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
             style={{ borderRadius: '8px 0 0 8px', minWidth: 150 }}
           />
-          <button
-            onClick={handleSearch}
-            style={{
-              padding: '8px 12px',
-              border: '1px solid var(--border)',
-              borderLeft: 'none',
-              borderRadius: '0 8px 8px 0',
-              background: 'var(--primary)',
-              color: '#fff',
-              cursor: 'pointer',
-            }}
-          >
+          <button onClick={handleSearch} style={{
+            padding: '8px 12px', border: '1px solid var(--border)', borderLeft: 'none',
+            borderRadius: '0 8px 8px 0', background: 'var(--primary)', color: '#fff', cursor: 'pointer',
+          }}>
             <Search size={16} />
           </button>
         </div>
       </div>
 
-      {loading ? (
-        <div className="loading"><div className="spinner" /></div>
-      ) : !data || data.items.length === 0 ? (
-        <div className="empty-state">
-          <p>Мэдээлэл олдсонгүй. Excel файл оруулна уу.</p>
-        </div>
+      {data.items.length === 0 ? (
+        <div className="empty-state"><p>Шүүлтүүрт тохирох мэдээлэл олдсонгүй.</p></div>
       ) : (
         <>
           <div className="table-wrapper">
@@ -215,13 +188,7 @@ export default function ComplaintTable({ fp }: { fp: FilterParams }) {
                       </span>
                     </td>
                     <td>
-                      <button
-                        onClick={() => setSelected(c)}
-                        style={{
-                          background: 'none', border: 'none', cursor: 'pointer',
-                          color: 'var(--primary)', padding: 4,
-                        }}
-                      >
+                      <button onClick={() => setSelected(c)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--primary)', padding: 4 }}>
                         <Eye size={18} />
                       </button>
                     </td>
@@ -235,9 +202,7 @@ export default function ComplaintTable({ fp }: { fp: FilterParams }) {
             <button disabled={page <= 1} onClick={() => setPage(page - 1)}>
               <ChevronLeft size={16} /> Өмнөх
             </button>
-            <span className="info">
-              Хуудас {page} / {totalPages} (Нийт {data.total})
-            </span>
+            <span className="info">Хуудас {page} / {totalPages} (Нийт {data.total})</span>
             <button disabled={page >= totalPages} onClick={() => setPage(page + 1)}>
               Дараах <ChevronRight size={16} />
             </button>

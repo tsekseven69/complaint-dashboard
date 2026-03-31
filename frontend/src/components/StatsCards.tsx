@@ -1,4 +1,4 @@
-import { DashboardStats } from '../api/client'
+import type { DashboardStats } from '../lib/analytics'
 
 interface Props {
   stats: DashboardStats

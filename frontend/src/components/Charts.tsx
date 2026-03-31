@@ -1,18 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useMemo } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend, CartesianGrid, LabelList,
   ComposedChart, Line, ReferenceLine,
 } from 'recharts'
+import type { Complaint } from '../lib/excelParser'
 import {
-  DashboardStats, FilterParams, SourceAnalysis, DailyDynamics,
-  fetchMonthlyDynamics, fetchSources, fetchDailyDynamics,
-  MonthlyDynamic,
-} from '../api/client'
+  computeMonthlyDynamics, computeSources, computeDailyDynamics,
+  type FilterParams, type DashboardStats, type MonthlyDynamic,
+} from '../lib/analytics'
 
 interface Props {
-  stats: DashboardStats
+  complaints: Complaint[]
   fp: FilterParams
+  stats: DashboardStats
 }
 
 const COLORS = [
@@ -27,34 +28,19 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 const DYNAMIC_COLORS: Record<string, string> = {
-  'ӨГ': '#1b2a4a',
-  'Гомдол': '#a01929',
-  'Зөрчил': '#8c8c8c',
-  'Хүсэлт': '#2e7d32',
-  'Санал': '#e65100',
-  'Мэдэгдэл': '#6a1b9a',
-  'Талархал': '#00838f',
-  'Бусад': '#546e7a',
+  'ӨГ': '#1b2a4a', 'Гомдол': '#a01929', 'Зөрчил': '#8c8c8c',
+  'Хүсэлт': '#2e7d32', 'Санал': '#e65100', 'Мэдэгдэл': '#6a1b9a',
+  'Талархал': '#00838f', 'Бусад': '#546e7a',
 }
 
 const SOURCE_COLORS: Record<string, string> = {
-  'G': '#1a73e8',
-  'C': '#ea4335',
-  'M': '#f9ab00',
-  'J': '#34a853',
-  'W': '#8e24aa',
+  'G': '#1a73e8', 'C': '#ea4335', 'M': '#f9ab00', 'J': '#34a853', 'W': '#8e24aa',
 }
 
-export default function Charts({ stats, fp }: Props) {
-  const [monthly, setMonthly] = useState<MonthlyDynamic[]>([])
-  const [sources, setSources] = useState<SourceAnalysis | null>(null)
-  const [daily, setDaily] = useState<DailyDynamics | null>(null)
-
-  useEffect(() => {
-    fetchMonthlyDynamics(fp).then(setMonthly).catch(() => {})
-    fetchSources(fp).then(setSources).catch(() => {})
-    fetchDailyDynamics(fp).then(setDaily).catch(() => {})
-  }, [fp])
+export default function Charts({ complaints, fp, stats }: Props) {
+  const monthly = useMemo(() => computeMonthlyDynamics(complaints, fp), [complaints, fp])
+  const sources = useMemo(() => computeSources(complaints, fp), [complaints, fp])
+  const daily = useMemo(() => computeDailyDynamics(complaints, fp), [complaints, fp])
 
   const districtData = stats.by_district.slice(0, 12).map((d) => ({
     name: d.district.replace('Улаанбаатар, ', 'УБ, '),
@@ -78,8 +64,8 @@ export default function Charts({ stats, fp }: Props) {
 
   return (
     <div className="charts-grid">
-      {/* ── Source prefix chart (Эх үүсвэрээр) ── */}
-      {sources && sources.sources.length > 0 && (
+      {/* Source prefix chart */}
+      {sources.sources.length > 0 && (
         <div className="chart-card" style={{ gridColumn: '1 / -1' }}>
           <h3>Эх үүсвэрээр (Гомдлын дугаарын эхний үсэг)</h3>
           <div style={{ display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -100,16 +86,10 @@ export default function Charts({ stats, fp }: Props) {
               </ResponsiveContainer>
             </div>
             <div style={{ minWidth: 220 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
-                Тайлбар
-              </div>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Тайлбар</div>
               {sources.sources.map((s) => (
                 <div key={s.prefix} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, fontSize: 13 }}>
-                  <div style={{
-                    width: 12, height: 12, borderRadius: 3,
-                    background: SOURCE_COLORS[s.prefix] || '#546e7a',
-                    flexShrink: 0,
-                  }} />
+                  <div style={{ width: 12, height: 12, borderRadius: 3, background: SOURCE_COLORS[s.prefix] || '#546e7a', flexShrink: 0 }} />
                   <strong>{s.prefix}</strong>
                   <span style={{ color: 'var(--text-secondary)' }}>— {s.name}</span>
                   <span style={{ marginLeft: 'auto', fontWeight: 600 }}>{s.count} ({s.pct}%)</span>
@@ -123,56 +103,31 @@ export default function Charts({ stats, fp }: Props) {
         </div>
       )}
 
-      {/* ── Daily dynamics with trend line + annotations ── */}
-      {daily && daily.daily.length > 0 && (
+      {/* Daily dynamics */}
+      {daily.daily.length > 0 && (
         <div className="chart-card" style={{ gridColumn: '1 / -1' }}>
           <h3>Өдөр тутмын гомдлын тоон динамик</h3>
           <ResponsiveContainer width="100%" height={380}>
-            <ComposedChart
-              data={daily.daily.map(d => ({ ...d, date: d.date.slice(5) }))}
-              margin={{ top: 20, right: 30, left: 10, bottom: 5 }}
-            >
+            <ComposedChart data={daily.daily.map(d => ({ ...d, date: d.date.slice(5) }))} margin={{ top: 20, right: 30, left: 10, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
               <XAxis dataKey="date" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
               <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 12 }} />
               <Tooltip contentStyle={{ borderRadius: 8, border: '1px solid #e0e0e0' }} />
               <Legend iconType="square" wrapperStyle={{ fontSize: 13, paddingTop: 10 }} />
               {Object.keys(SOURCE_COLORS).map((prefix) => (
-                <Bar
-                  key={prefix}
-                  dataKey={prefix}
-                  name={prefix}
-                  stackId="sources"
-                  fill={SOURCE_COLORS[prefix]}
-                  maxBarSize={40}
-                />
+                <Bar key={prefix} dataKey={prefix} name={prefix} stackId="sources" fill={SOURCE_COLORS[prefix]} maxBarSize={40} />
               ))}
-              <Line
-                type="monotone"
-                dataKey="trend"
-                name="Тренд (3 өдрийн дундаж)"
-                stroke="#1b2a4a"
-                strokeWidth={2.5}
-                dot={false}
-              />
+              <Line type="monotone" dataKey="trend" name="Тренд (3 өдрийн дундаж)" stroke="#1b2a4a" strokeWidth={2.5} dot={false} />
               {daily.annotations.filter(a => a.reason !== 'Бага өдөр').map((a) => (
-                <ReferenceLine
-                  key={a.date}
-                  x={a.date.slice(5)}
-                  stroke="#ea4335"
-                  strokeDasharray="3 3"
-                  label={{ value: a.reason, position: 'top', fontSize: 10, fill: '#c5221f' }}
-                />
+                <ReferenceLine key={a.date} x={a.date.slice(5)} stroke="#ea4335" strokeDasharray="3 3"
+                  label={{ value: a.reason, position: 'top', fontSize: 10, fill: '#c5221f' }} />
               ))}
             </ComposedChart>
           </ResponsiveContainer>
           {daily.annotations.length > 0 && (
             <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
               {daily.annotations.filter(a => a.reason !== 'Бага өдөр').map((a) => (
-                <div key={a.date} style={{
-                  padding: '4px 10px', borderRadius: 8, fontSize: 12,
-                  background: '#fce8e6', color: '#c5221f', border: '1px solid #ea433540',
-                }}>
+                <div key={a.date} style={{ padding: '4px 10px', borderRadius: 8, fontSize: 12, background: '#fce8e6', color: '#c5221f', border: '1px solid #ea433540' }}>
                   <strong>{a.date.slice(5)}</strong>: {a.count} гомдол — {a.reason} ({a.reason_count})
                 </div>
               ))}
@@ -181,7 +136,7 @@ export default function Charts({ stats, fp }: Props) {
         </div>
       )}
 
-      {/* ── Monthly Dynamics ── */}
+      {/* Monthly Dynamics */}
       {monthly.length > 0 && (
         <div className="chart-card" style={{ gridColumn: '1 / -1' }}>
           <h3>Сараар (Өргөдөл, гомдлын тоон динамик)</h3>

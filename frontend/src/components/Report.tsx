@@ -1,67 +1,42 @@
-import { useEffect, useState } from 'react'
+import { useMemo } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   CartesianGrid, Legend, LabelList,
 } from 'recharts'
-import { FilterParams, Report as ReportData, fetchReport } from '../api/client'
+import type { Complaint } from '../lib/excelParser'
+import { computeReport, type FilterParams, type Report as ReportData } from '../lib/analytics'
 
 const DYNAMIC_COLORS: Record<string, string> = {
-  'ӨГ': '#1b2a4a',
-  'Гомдол': '#a01929',
-  'Зөрчил': '#8c8c8c',
-  'Хүсэлт': '#2e7d32',
-  'Санал': '#e65100',
-  'Мэдэгдэл': '#6a1b9a',
-  'Талархал': '#00838f',
-  'Бусад': '#546e7a',
+  'ӨГ': '#1b2a4a', 'Гомдол': '#a01929', 'Зөрчил': '#8c8c8c',
+  'Хүсэлт': '#2e7d32', 'Санал': '#e65100', 'Мэдэгдэл': '#6a1b9a',
+  'Талархал': '#00838f', 'Бусад': '#546e7a',
 }
 
-export default function Report({ fp }: { fp: FilterParams }) {
-  const [data, setData] = useState<ReportData | null>(null)
-  const [loading, setLoading] = useState(true)
+export default function Report({ complaints, fp }: { complaints: Complaint[]; fp: FilterParams }) {
+  const data = useMemo(() => computeReport(complaints, fp), [complaints, fp])
 
-  useEffect(() => {
-    setLoading(true)
-    fetchReport(fp).then(setData).catch(() => {}).finally(() => setLoading(false))
-  }, [fp])
-
-  if (loading) return <div className="loading"><div className="spinner" /></div>
   if (!data || !data.summary.total) return (
     <div className="empty-state"><p>Мэдээлэл байхгүй. Excel файл оруулна уу.</p></div>
   )
 
   const { summary, type_breakdown, monthly, category_table, district_table, responding_org_table } = data
 
-  // Bar keys for monthly chart
   const barKeys = monthly.length > 0
     ? ['ӨГ', ...Object.keys(monthly[0]).filter(k => !['month', 'month_num', 'ӨГ'].includes(k))]
     : []
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-
-      {/* ── Header ── */}
-      <div style={{
-        background: '#fff',
-        borderRadius: 12,
-        padding: '24px 28px',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-      }}>
+      {/* Header */}
+      <div style={{ background: '#fff', borderRadius: 12, padding: '24px 28px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
         <h2 style={{ fontSize: 20, fontWeight: 700, marginBottom: 4, textAlign: 'center' }}>
           Ирсэн өргөдөл, гомдлын бүртгэлийн тайлан
         </h2>
-        {summary.date_range && (
-          <p style={{ textAlign: 'center', color: '#5f6368', fontSize: 14 }}>{summary.date_range}</p>
-        )}
+        {summary.date_range && <p style={{ textAlign: 'center', color: '#5f6368', fontSize: 14 }}>{summary.date_range}</p>}
       </div>
 
-      {/* ── Summary Table ── */}
-      <div style={{
-        background: '#fff',
-        borderRadius: 12,
-        padding: 24,
-        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-      }}>
+      {/* Summary Table */}
+      <div style={{ background: '#fff', borderRadius: 12, padding: 24, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
         <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16 }}>Нэгдсэн мэдээлэл</h3>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <tbody>
@@ -87,17 +62,10 @@ export default function Report({ fp }: { fp: FilterParams }) {
         </table>
       </div>
 
-      {/* ── Monthly Dynamics Chart ── */}
+      {/* Monthly Dynamics */}
       {monthly.length > 0 && (
-        <div style={{
-          background: '#fff',
-          borderRadius: 12,
-          padding: 24,
-          boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-        }}>
-          <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, textAlign: 'center' }}>
-            Өргөдөл, гомдлын тоон динамик
-          </h3>
+        <div style={{ background: '#fff', borderRadius: 12, padding: 24, boxShadow: '0 1px 3px rgba(0,0,0,0.08)' }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 16, textAlign: 'center' }}>Өргөдөл, гомдлын тоон динамик</h3>
           <ResponsiveContainer width="100%" height={380}>
             <BarChart data={monthly} margin={{ top: 20, right: 30, left: 10, bottom: 5 }} barCategoryGap="25%" barGap={4}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -115,16 +83,9 @@ export default function Report({ fp }: { fp: FilterParams }) {
         </div>
       )}
 
-      {/* ── Category Table (Ангилал / Тоо / Хувь) ── */}
-      <div style={{
-        background: '#fff',
-        borderRadius: 12,
-        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-        overflow: 'hidden',
-      }}>
-        <h3 style={{ fontSize: 16, fontWeight: 700, padding: '16px 24px', borderBottom: '1px solid #dadce0' }}>
-          Ангилалаар
-        </h3>
+      {/* Category Table */}
+      <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, padding: '16px 24px', borderBottom: '1px solid #dadce0' }}>Ангилалаар</h3>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
@@ -152,16 +113,9 @@ export default function Report({ fp }: { fp: FilterParams }) {
         </div>
       </div>
 
-      {/* ── District Table ── */}
-      <div style={{
-        background: '#fff',
-        borderRadius: 12,
-        boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-        overflow: 'hidden',
-      }}>
-        <h3 style={{ fontSize: 16, fontWeight: 700, padding: '16px 24px', borderBottom: '1px solid #dadce0' }}>
-          Дүүрэг / Аймгаар
-        </h3>
+      {/* District Table */}
+      <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
+        <h3 style={{ fontSize: 16, fontWeight: 700, padding: '16px 24px', borderBottom: '1px solid #dadce0' }}>Дүүрэг / Аймгаар</h3>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
@@ -181,14 +135,9 @@ export default function Report({ fp }: { fp: FilterParams }) {
                   <td style={{ padding: '10px 14px', textAlign: 'center' }}>{d.pct}</td>
                   <td style={{ padding: '10px 14px', textAlign: 'center' }}>{d.resolved}</td>
                   <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                    <span style={{
-                      padding: '2px 8px',
-                      borderRadius: 10,
-                      fontSize: 12,
-                      fontWeight: 600,
+                    <span style={{ padding: '2px 8px', borderRadius: 10, fontSize: 12, fontWeight: 600,
                       background: d.resolution_rate >= 30 ? '#e6f4ea' : d.resolution_rate > 0 ? '#fef7e0' : '#fce8e6',
-                      color: d.resolution_rate >= 30 ? '#137333' : d.resolution_rate > 0 ? '#b06000' : '#c5221f',
-                    }}>
+                      color: d.resolution_rate >= 30 ? '#137333' : d.resolution_rate > 0 ? '#b06000' : '#c5221f' }}>
                       {d.resolution_rate}%
                     </span>
                   </td>
@@ -199,17 +148,10 @@ export default function Report({ fp }: { fp: FilterParams }) {
         </div>
       </div>
 
-      {/* ── Responding Orgs Table (Хариу өгсөн байгууллага) ── */}
+      {/* Responding Orgs */}
       {responding_org_table.length > 0 && (
-        <div style={{
-          background: '#fff',
-          borderRadius: 12,
-          boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-          overflow: 'hidden',
-        }}>
-          <h3 style={{ fontSize: 16, fontWeight: 700, padding: '16px 24px', borderBottom: '1px solid #dadce0' }}>
-            Хариу өгсөн байгууллага
-          </h3>
+        <div style={{ background: '#fff', borderRadius: 12, boxShadow: '0 1px 3px rgba(0,0,0,0.08)', overflow: 'hidden' }}>
+          <h3 style={{ fontSize: 16, fontWeight: 700, padding: '16px 24px', borderBottom: '1px solid #dadce0' }}>Хариу өгсөн байгууллага</h3>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
@@ -229,9 +171,7 @@ export default function Report({ fp }: { fp: FilterParams }) {
                 ))}
                 <tr style={{ background: '#f8f9fa', fontWeight: 700, borderTop: '2px solid #dadce0' }}>
                   <td style={{ padding: '10px 24px' }}>Нийт</td>
-                  <td style={{ padding: '10px 14px', textAlign: 'center' }}>
-                    {responding_org_table.reduce((s, o) => s + o.count, 0)}
-                  </td>
+                  <td style={{ padding: '10px 14px', textAlign: 'center' }}>{responding_org_table.reduce((s, o) => s + o.count, 0)}</td>
                   <td style={{ padding: '10px 14px', textAlign: 'center' }}>100</td>
                 </tr>
               </tbody>
@@ -243,26 +183,6 @@ export default function Report({ fp }: { fp: FilterParams }) {
   )
 }
 
-const summaryCell: React.CSSProperties = {
-  padding: '12px 24px',
-  fontSize: 14,
-  fontWeight: 600,
-}
-
-const summaryVal: React.CSSProperties = {
-  padding: '12px 24px',
-  fontSize: 18,
-  fontWeight: 700,
-  textAlign: 'right',
-}
-
-const thStyle: React.CSSProperties = {
-  padding: '10px 24px',
-  textAlign: 'left',
-  fontWeight: 700,
-  fontSize: 12,
-  textTransform: 'uppercase',
-  letterSpacing: 0.3,
-  color: '#5f6368',
-  borderBottom: '2px solid #dadce0',
-}
+const summaryCell: React.CSSProperties = { padding: '12px 24px', fontSize: 14, fontWeight: 600 }
+const summaryVal: React.CSSProperties = { padding: '12px 24px', fontSize: 18, fontWeight: 700, textAlign: 'right' }
+const thStyle: React.CSSProperties = { padding: '10px 24px', textAlign: 'left', fontWeight: 700, fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.3, color: '#5f6368', borderBottom: '2px solid #dadce0' }

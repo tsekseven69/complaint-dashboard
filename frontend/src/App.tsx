@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { BarChart3, Table2, Upload, Brain, FileText, Tags, Building2, Calendar } from 'lucide-react'
-import { DashboardStats, FilterOptions, FilterParams, UploadResult, fetchFilters, fetchStats } from './api/client'
+import { parseExcelFile, type Complaint } from './lib/excelParser'
+import {
+  computeStats, computeFilters, type FilterParams, type FilterOptions, type DashboardStats,
+} from './lib/analytics'
 import FileUpload from './components/FileUpload'
 import StatsCards from './components/StatsCards'
 import Charts from './components/Charts'
@@ -12,10 +15,9 @@ import CategoryAnalysis from './components/CategoryAnalysis'
 type Tab = 'dashboard' | 'report' | 'categories' | 'analytics' | 'table'
 
 export default function App() {
-  const [stats, setStats] = useState<DashboardStats | null>(null)
-  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
+  const [complaints, setComplaints] = useState<Complaint[]>([])
   const [tab, setTab] = useState<Tab>('dashboard')
-  const [loading, setLoading] = useState(true)
+  const [uploadMsg, setUploadMsg] = useState<string | null>(null)
   const [filters, setFilters] = useState<FilterOptions | null>(null)
   const [selectedOrg, setSelectedOrg] = useState('')
   const [dateFrom, setDateFrom] = useState('')
@@ -27,31 +29,29 @@ export default function App() {
     date_to: dateTo || undefined,
   }), [selectedOrg, dateFrom, dateTo])
 
-  const loadStats = useCallback(async () => {
-    setLoading(true)
-    try {
-      const s = await fetchStats(fp)
-      setStats(s)
-    } catch {
-      // stats will be null when no data exists
-    } finally {
-      setLoading(false)
-    }
-  }, [fp])
+  const stats: DashboardStats | null = useMemo(() => {
+    if (complaints.length === 0) return null
+    return computeStats(complaints, fp)
+  }, [complaints, fp])
 
-  useEffect(() => {
-    loadStats()
-  }, [loadStats])
+  const handleFile = useCallback(async (file: File) => {
+    const buffer = await file.arrayBuffer()
+    const { complaints: parsed } = parseExcelFile(buffer)
+    setComplaints(prev => {
+      // Merge by complaint_id (upsert logic)
+      const map = new Map(prev.map(c => [c.complaint_id, c]))
+      for (const c of parsed) map.set(c.complaint_id, c)
+      const merged = [...map.values()].sort((a, b) => a.complaint_number - b.complaint_number)
+      return merged
+    })
+    setFilters(computeFilters([...new Map([...complaints, ...parsed].map(c => [c.complaint_id, c])).values()]))
+    setUploadMsg(`Амжилттай! ${parsed.length} гомдол уншигдлаа.`)
+  }, [complaints])
 
-  useEffect(() => {
-    fetchFilters().then(setFilters).catch(() => {})
-  }, [])
-
-  const handleUploadSuccess = useCallback((result: UploadResult) => {
-    setUploadResult(result)
-    loadStats()
-    fetchFilters().then(setFilters).catch(() => {})
-  }, [loadStats])
+  // Recompute filters when complaints change
+  useMemo(() => {
+    if (complaints.length > 0) setFilters(computeFilters(complaints))
+  }, [complaints])
 
   const hasFilters = selectedOrg || dateFrom || dateTo
 
@@ -64,58 +64,56 @@ export default function App() {
         )}
       </div>
 
-      <FileUpload onUploadSuccess={handleUploadSuccess} />
+      <FileUpload onFile={handleFile} />
 
-      {uploadResult && (
-        <div className="upload-result">
-          Амжилттай! {uploadResult.total_parsed} гомдол уншигдлаа,
-          {' '}{uploadResult.total_inserted} бичигдлээ.
-          {uploadResult.date_range && ` (${uploadResult.date_range})`}
-        </div>
+      {uploadMsg && (
+        <div className="upload-result">{uploadMsg}</div>
       )}
 
       {/* Global filters */}
-      <div className="global-filter-bar">
-        <div className="filter-group">
-          <Building2 size={16} className="filter-icon" />
-          <select
-            value={selectedOrg}
-            onChange={(e) => setSelectedOrg(e.target.value)}
-            className="filter-select"
-          >
-            <option value="">Бүх байгууллага</option>
-            {filters?.responding_orgs.map((o) => (
-              <option key={o} value={o}>{o.length > 60 ? o.slice(0, 60) + '...' : o}</option>
-            ))}
-          </select>
+      {complaints.length > 0 && (
+        <div className="global-filter-bar">
+          <div className="filter-group">
+            <Building2 size={16} className="filter-icon" />
+            <select
+              value={selectedOrg}
+              onChange={(e) => setSelectedOrg(e.target.value)}
+              className="filter-select"
+            >
+              <option value="">Бүх байгууллага</option>
+              {filters?.responding_orgs.map((o) => (
+                <option key={o} value={o}>{o.length > 60 ? o.slice(0, 60) + '...' : o}</option>
+              ))}
+            </select>
+          </div>
+          <div className="filter-group">
+            <Calendar size={16} className="filter-icon" />
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="filter-date"
+              placeholder="Эхлэх"
+            />
+            <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>—</span>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="filter-date"
+              placeholder="Дуусах"
+            />
+          </div>
+          {hasFilters && (
+            <button
+              onClick={() => { setSelectedOrg(''); setDateFrom(''); setDateTo('') }}
+              className="filter-clear"
+            >
+              Цэвэрлэх
+            </button>
+          )}
         </div>
-        <div className="filter-group">
-          <Calendar size={16} className="filter-icon" />
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => setDateFrom(e.target.value)}
-            className="filter-date"
-            placeholder="Эхлэх"
-          />
-          <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>—</span>
-          <input
-            type="date"
-            value={dateTo}
-            onChange={(e) => setDateTo(e.target.value)}
-            className="filter-date"
-            placeholder="Дуусах"
-          />
-        </div>
-        {hasFilters && (
-          <button
-            onClick={() => { setSelectedOrg(''); setDateFrom(''); setDateTo('') }}
-            className="filter-clear"
-          >
-            Цэвэрлэх
-          </button>
-        )}
-      </div>
+      )}
 
       <div className="tabs">
         <button className={`tab ${tab === 'dashboard' ? 'active' : ''}`} onClick={() => setTab('dashboard')}>
@@ -140,13 +138,11 @@ export default function App() {
         </button>
       </div>
 
-      {loading ? (
-        <div className="loading"><div className="spinner" /></div>
-      ) : tab === 'dashboard' ? (
+      {tab === 'dashboard' ? (
         stats && stats.total_complaints > 0 ? (
           <>
             <StatsCards stats={stats} />
-            <Charts stats={stats} fp={fp} />
+            <Charts complaints={complaints} fp={fp} stats={stats} />
           </>
         ) : (
           <div className="empty-state">
@@ -155,13 +151,13 @@ export default function App() {
           </div>
         )
       ) : tab === 'report' ? (
-        <Report fp={fp} />
+        <Report complaints={complaints} fp={fp} />
       ) : tab === 'categories' ? (
-        <CategoryAnalysis fp={fp} />
+        <CategoryAnalysis complaints={complaints} fp={fp} />
       ) : tab === 'analytics' ? (
-        <Analytics fp={fp} />
+        <Analytics complaints={complaints} fp={fp} />
       ) : (
-        <ComplaintTable fp={fp} />
+        <ComplaintTable complaints={complaints} fp={fp} />
       )}
     </div>
   )
